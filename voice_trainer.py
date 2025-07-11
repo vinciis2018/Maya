@@ -1,0 +1,336 @@
+import os
+import sounddevice as sd
+import numpy as np
+import scipy.io.wavfile as wav
+from scipy.spatial.distance import cosine
+import whisper
+import json
+import shutil
+import uuid
+from datetime import datetime
+from rich.console import Console
+from rich.progress import Progress
+from rich.panel import Panel
+from rich.text import Text
+
+console = Console()
+
+class VoiceTrainer:
+    def __init__(self, voice_dir="voices", transcript_file="transcripts.json"):
+        self.voice_dir = voice_dir
+        self.samples_dir = os.path.join(voice_dir, "samples")
+        os.makedirs(self.samples_dir, exist_ok=True)
+        self.transcript_file = transcript_file
+        self.model = whisper.load_model("tiny.en")
+        self.speaker_profiles = {}
+        self.transcripts = []  # Changed from dict to list
+        
+        # Load existing transcripts if they exist
+        if os.path.exists(self.transcript_file):
+            try:
+                with open(self.transcript_file, 'r') as f:
+                    loaded_data = json.load(f)
+                    # Convert old format to new format if needed
+                    if isinstance(loaded_data, dict):
+                        self.transcripts = [
+                            {'id': k, 'samples': v.get('samples', []), 'features': v.get('features', [])}
+                            for k, v in loaded_data.items()
+                        ]
+                    else:
+                        self.transcripts = loaded_data
+            except Exception as e:
+                console.print(f"[yellow]Warning: Could not load transcripts: {e}[/yellow]")
+                self.transcripts = []
+        
+        # Create speaker directories for existing speakers
+        for speaker in self.transcripts:
+            os.makedirs(os.path.join(self.samples_dir, speaker['id']), exist_ok=True)
+
+    def record_voice_sample(self, duration=5, sample_rate=16000):
+        """Record a voice sample and save it temporarily"""
+        console.print("\n[bold]Recording voice sample...[/bold]")
+        audio = sd.rec(int(duration * sample_rate), 
+                      samplerate=sample_rate, 
+                      channels=1,
+                      dtype='float32')
+        sd.wait()
+        return audio.flatten(), sample_rate
+
+    def save_voice_sample(self, speaker_id, audio, sample_rate, transcript):
+        """Save a voice sample for a specific speaker with a unique ID"""
+        # Create speaker directory if it doesn't exist
+        speaker_dir = os.path.join(self.samples_dir, speaker_id)
+        os.makedirs(speaker_dir, exist_ok=True)
+        
+        # Generate unique filename with timestamp and transcript snippet
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        safe_transcript = "".join(c if c.isalnum() else "_" for c in transcript[:20])
+        filename = os.path.join(speaker_dir, f"{timestamp}_{safe_transcript}_{str(uuid.uuid4())[:8]}.wav")
+        
+        wav.write(filename, sample_rate, audio)
+        return filename
+
+    def extract_features(self, audio_path):
+        """Extract comprehensive features from audio file"""
+        sample_rate, audio = wav.read(audio_path)
+        if audio.dtype == np.int16:
+            audio = audio.astype(np.float32) / 32768.0
+        
+        # Calculate various features
+        features = [
+            # Basic statistics
+            np.mean(audio),
+            np.std(audio),
+            np.max(np.abs(audio)),
+            np.median(audio),
+            np.mean(np.abs(audio)),
+            
+            # Frequency domain features
+            np.mean(np.abs(np.fft.fft(audio))[:len(audio)//2]),
+            np.std(np.abs(np.fft.fft(audio))[:len(audio)//2]),
+            
+            # Temporal features
+            np.mean(np.diff(audio)),
+            np.std(np.diff(audio)),
+            
+            # Energy features
+            np.sum(np.abs(audio)**2) / len(audio),
+            np.max(np.abs(audio)**2),
+            
+            # Zero crossing rate
+            np.mean(np.abs(np.diff(np.sign(audio)))) / 2
+        ]
+        
+        return np.array(features)
+
+    def transcribe_audio(self, audio_path):
+        """Transcribe audio using Whisper"""
+        result = self.model.transcribe(audio_path, fp16=False, language='en')
+        return result["text"].strip()
+
+    def train_with_transcript(self, speaker_id, transcript):
+        """Train the system with a specific transcript"""
+        console.print(f"\n[bold]Training with transcript for {speaker_id}[/bold]")
+        console.print(f"[bold]Transcript:[/bold] {transcript}")
+        
+        # Record the audio
+        console.print("\n[bold]Please speak the following sentence:[/bold]")
+        console.print(f"[italic]{transcript}[/italic]")
+        audio, sample_rate = self.record_voice_sample()
+        
+        if len(audio) == 0:
+            console.print("[red]No audio recorded, please try again[/red]")
+            return False
+        
+        # Save the audio with a unique filename
+        filename = self.save_voice_sample(speaker_id, audio, sample_rate, transcript)
+        
+        # Transcribe the audio
+        with console.status("[cyan]Transcribing audio..."):
+            transcription = self.transcribe_audio(filename)
+        
+        # Compare transcription with provided transcript
+        similarity = self._calculate_text_similarity(transcript, transcription)
+        
+        if similarity < 0.7:  # If transcription is too different
+            console.print(f"[yellow]Warning: Transcription doesn't match provided text[/yellow]")
+            console.print(f"[yellow]Expected: {transcript}[/yellow]")
+            console.print(f"[yellow]Got: {transcription}[/yellow]")
+            
+            if not console.input("\n[bold]Would you like to try again? (y/n):[/bold] ").lower().startswith('y'):
+                return False
+                
+            return self.train_with_transcript(speaker_id, transcript)
+        
+        # Extract features
+        features = self.extract_features(filename)
+        
+        # Find or create speaker data
+        speaker_data = next((s for s in self.transcripts if s['id'] == speaker_id), None)
+        if not speaker_data:
+            speaker_data = {
+                'id': speaker_id,
+                'samples': [],
+                'features': []
+            }
+            self.transcripts.append(speaker_data)
+            
+            # Create speaker directory
+            os.makedirs(os.path.join(self.samples_dir, speaker_id), exist_ok=True)
+        
+        # Save sample data
+        sample_data = {
+            'id': str(uuid.uuid4()),
+            'transcript': transcript,
+            'filename': filename,
+            'timestamp': datetime.now().isoformat(),
+            'features': features.tolist()
+        }
+        
+        speaker_data['samples'].append(sample_data)
+        
+        # Update speaker's feature profile (average of all samples)
+        if speaker_data['samples']:
+            all_features = [np.array(s['features']) for s in speaker_data['samples']]
+            avg_features = np.mean(all_features, axis=0).tolist()
+            speaker_data['features'] = avg_features
+        
+        # Save transcripts to file
+        self._save_transcripts()
+        
+        console.print(f"\n[green]Successfully trained with transcript for {speaker_id}![/green]")
+        console.print(f"[green]Total samples for {speaker_id}: {len(speaker_data['samples'])}[/green]")
+        return True
+
+    def _calculate_text_similarity(self, text1, text2):
+        """Calculate similarity between two texts using simple word overlap"""
+        words1 = set(text1.lower().split())
+        words2 = set(text2.lower().split())
+        common_words = words1.intersection(words2)
+        return len(common_words) / max(len(words1), len(words2))
+
+    def _save_transcripts(self):
+        """Save transcripts to file"""
+        try:
+            with open(self.transcript_file, 'w') as f:
+                json.dump(self.transcripts, f, indent=4, default=str)
+            return True
+        except Exception as e:
+            console.print(f"[red]Error saving transcripts: {e}[/red]")
+            return False
+
+    def recognize_speaker(self, audio_path, min_confidence=0.7):
+        """Recognize speaker based on voice and transcript matching"""
+        if not self.transcripts:
+            return None, 0.0
+            
+        # Extract features from the new audio
+        try:
+            features = self.extract_features(audio_path)
+        except Exception as e:
+            console.print(f"[red]Error extracting features: {e}[/red]")
+            return None, 0.0
+            
+        best_match = None
+        highest_confidence = 0.0
+        
+        # Transcribe the new audio for text matching
+        with console.status("[cyan]Processing audio..."):
+            new_transcript = self.transcribe_audio(audio_path)
+        
+        # Compare against each known speaker
+        for speaker_data in self.transcripts:
+            if not speaker_data.get('samples'):
+                continue
+                
+            speaker_id = speaker_data['id']
+            
+            # Calculate voice similarity with each sample
+            voice_similarities = []
+            text_similarities = []
+            
+            for sample in speaker_data['samples']:
+                try:
+                    # Voice similarity
+                    stored_features = np.array(sample['features'])
+                    voice_sim = 1 - cosine(features, stored_features)
+                    voice_similarities.append(voice_sim)
+                    
+                    # Text similarity (if we have a transcript)
+                    if new_transcript and 'transcript' in sample:
+                        text_sim = self._calculate_text_similarity(
+                            sample['transcript'], new_transcript
+                        )
+                        text_similarities.append(text_sim)
+                except Exception as e:
+                    console.print(f"[yellow]Error comparing with sample: {e}[/yellow]")
+            
+            if not voice_similarities:
+                continue
+                
+            # Calculate average similarities
+            avg_voice_sim = np.mean(voice_similarities)
+            avg_text_sim = np.mean(text_similarities) if text_similarities else 1.0
+            
+            # Combined confidence (weighted average)
+            confidence = (avg_voice_sim * 0.7) + (avg_text_sim * 0.3)
+            
+            if confidence > highest_confidence:
+                highest_confidence = confidence
+                best_match = speaker_id
+        
+        # Only return a match if confidence is above threshold
+        if highest_confidence >= min_confidence:
+            return best_match, highest_confidence
+        return None, highest_confidence
+
+    def test_recognition(self, duration=5, sample_rate=16000):
+        """Test voice recognition with transcription"""
+        console.print("\n[bold]Testing recognition...[/bold]")
+        console.print("Please speak a sentence...")
+        
+        # Ensure voices directory exists
+        os.makedirs('voices', exist_ok=True)
+        
+        # Record audio
+        temp_file = os.path.join('voices', 'temp_recognition.wav')
+        try:
+            # Record audio
+            audio_data, _ = self.record_voice_sample(duration=duration, sample_rate=sample_rate)
+            wav.write(temp_file, sample_rate, audio_data)
+            
+            # Get transcription
+            transcription = None
+            try:
+                transcription = self.transcribe_audio(temp_file)
+                if transcription:
+                    console.print(f"\n[dim]You said: {transcription}[/dim]")
+            except Exception as e:
+                console.print(f"[yellow]Note: Could not transcribe audio: {e}[/yellow]")
+            
+            # Recognize speaker
+            if os.path.exists(temp_file):
+                speaker, confidence = self.recognize_speaker(temp_file)
+                return speaker, confidence
+            
+            return None, 0.0
+            
+        except Exception as e:
+            console.print(f"[red]Error during recognition: {e}[/red]")
+            return None, 0.0
+            
+        finally:
+            # Clean up
+            if os.path.exists(temp_file):
+                if os.path.exists(temp_file):
+                    try:
+                        os.remove(temp_file)
+                    except Exception as e:
+                        console.print(f"[yellow]Warning: Could not remove temp file: {e}[/yellow]")
+
+def list_speakers(trainer):
+    """List all trained speakers and their sample counts"""
+    if not trainer.transcripts:
+        console.print("\n[red]No speakers have been trained yet![/red]")
+        return False
+    
+    console.print("\n[bold]Trained Speakers:[/bold]")
+    for speaker in trainer.transcripts:
+        sample_count = len(speaker.get('samples', []))
+        console.print(f"- {speaker['id']}: {sample_count} samples")
+    return True
+
+def view_samples(trainer, speaker_id):
+    """View samples for a specific speaker"""
+    speaker = next((s for s in trainer.transcripts if s['id'] == speaker_id), None)
+    if not speaker:
+        console.print(f"[red]No speaker found with ID: {speaker_id}[/red]")
+        return False
+    
+    console.print(f"\n[bold]Samples for {speaker_id}:[/bold]")
+    for i, sample in enumerate(speaker.get('samples', []), 1):
+        console.print(f"{i}. {sample.get('transcript', 'No transcript')}")
+        console.print(f"   Recorded: {sample.get('timestamp', 'Unknown')}")
+        console.print(f"   File: {sample.get('filename', 'Unknown')}")
+        console.print()
+    return True

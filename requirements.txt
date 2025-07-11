@@ -1,0 +1,17 @@
+# Core
+python-dotenv==1.0.0
+
+# Development
+pytest==8.2.0
+black==24.3.0
+flake8==7.0.0
+isort==5.13.2
+mypy==1.9.0
+
+# Format: package-name==version
+flask==3.0.0
+requests==2.26.0
+rich==13.7.0
+sounddevice==0.4.6
+numpy==1.26.3
+openai-whisper==20231117

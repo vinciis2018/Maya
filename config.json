@@ -1,0 +1,49 @@
+{
+  "agent_name": "Maya",
+  "ollama_base_url": "http://localhost:11434",
+  "server_port": 3009,
+  "conversation_history": {
+      "enabled": true,
+      "max_conversations": 10,
+      "max_messages": 20
+  },
+  "voice_output": {
+      "enabled": true,
+      "options": [
+          "text_only",
+          "voice_only",
+          "both"
+      ],
+      "mode": "both",
+      "voice_name": "Samantha",
+      "rate": 175,
+      "pitch": 0.8
+  },
+  "personalities": {
+      "default": {
+          "model": "phi3",
+          "description": "Default Assistant",
+          "system_prompt": "You are Ava, a helpful, respectful and honest assistant."
+      },
+      "coder": {
+          "model": "qwen2.5-coder:1.5b",
+          "description": "Programming Expert",
+          "system_prompt": "You are CodeAva, an expert programming assistant. Provide accurate, efficient code solutions and explain concepts clearly."
+      },
+      "visual": {
+          "model": "llava:13b",
+          "description": "Visual Assistant",
+          "system_prompt": "You are VisionAva, a visual AI assistant with image understanding capabilities. Describe images in detail and answer questions about visual content."
+      },
+      "creative": {
+          "model": "llama3.1:8b",
+          "description": "Creative Writer",
+          "system_prompt": "You are MuseAva, a creative writing assistant. Use vivid language and rich descriptions to engage your audience."
+      },
+      "concise": {
+          "model": "phi3",
+          "description": "Concise Assistant",
+          "system_prompt": "You are BriefAva, a concise assistant. Keep responses brief and to the point while maintaining clarity."
+      }
+  }
+}
