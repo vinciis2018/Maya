@@ -1,0 +1,11 @@
+README.md
+setup.py
+hedes.egg-info/PKG-INFO
+hedes.egg-info/SOURCES.txt
+hedes.egg-info/dependency_links.txt
+hedes.egg-info/requires.txt
+hedes.egg-info/top_level.txt
+server/__init__.py
+server/app.py
+server/assistant/__init__.py
+server/assistant/assistant.py

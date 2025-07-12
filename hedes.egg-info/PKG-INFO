@@ -1,0 +1,6 @@
+Metadata-Version: 2.4
+Name: hedes
+Version: 0.1
+Requires-Dist: flask
+Requires-Dist: requests
+Dynamic: requires-dist

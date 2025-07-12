@@ -62,3 +62,25 @@ Vani                ta_IN    # Hello! My name is Vani.
 
 <!-- Run Voice to Text Command -->
 python voice_command.py
+
+
+
+<!-- Client Folder Structure -->
+client/
+├── src/
+│   ├── __init__.py
+│   ├── api/
+│   │   └── client.py         # API client for server communication
+│   ├── ui/
+│   │   ├── __init__.py
+│   │   ├── base_ui.py        # Abstract base UI class
+│   │   └── console_ui.py     # Rich console-based UI implementation
+│   ├── voice/
+│   │   ├── __init__.py
+│   │   ├── recorder.py       # Audio recording functionality
+│   │   ├── trainer.py        # Voice training and recognition
+│   │   ├── tts.py           # Text-to-speech functionality
+│   │   └── command.py       # Voice command handling
+│   └── application.py       # Main application class
+├── main.py                  # Entry point
+└── requirements.txt         # Dependencies
