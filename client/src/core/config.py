@@ -36,9 +36,15 @@ class Config:
     
     @property
     def server_url(self) -> str:
-        """Get the server URL from config."""
-        base_url = f"http://localhost:{self.get('server_port', 5000)}"
-        return f"{base_url}/api"  # Add /api prefix for all API endpoints
+        """Get the server URL from config.
+        
+        Returns:
+            str: The base URL for the FastAPI server with /api prefix (e.g., 'http://localhost:3009/api')
+        """
+        # Use 127.0.0.1 instead of localhost for more reliable connections
+        host = self.get('server_host', '127.0.0.1')
+        port = self.get('server_port', 3009)  # Default FastAPI port is 3009
+        return f"http://{host}:{port}/api"  # Add /api prefix to match FastAPI routes
     
     @property
     def voice_output_enabled(self) -> bool:

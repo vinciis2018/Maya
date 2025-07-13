@@ -1,70 +1,101 @@
-from flask import Blueprint, request, jsonify
+from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Body
+from fastapi.responses import JSONResponse
+from typing import Dict, Any
+import os
+
+# Import the document controller
 from server.controllers.document_controller import DocumentController
 
-def create_document_routes(document_controller):
-    """Create and configure the document routes.
-    
-    Args:
-        document_controller: Instance of DocumentController
+router = APIRouter(prefix="/api")
+
+def get_document_controller() -> DocumentController:
+    """Dependency to get the document controller instance."""
+    from server.main import app
+    return app.state.document_controller
+
+def _handle_controller_result(result):
+    """Handle controller results that might be tuples of (response, status_code)."""
+    if isinstance(result, tuple) and len(result) == 2 and isinstance(result[1], int):
+        return JSONResponse(content=result[0], status_code=result[1])
+    return result
+
+@router.post("/documents/upload")
+async def upload_document(
+    file: UploadFile = File(...),
+    controller: DocumentController = Depends(get_document_controller)
+):
+    """Handle file uploads."""
+    try:
+        # Save the uploaded file temporarily
+        file_path = os.path.join(controller.upload_folder, file.filename)
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
         
-    Returns:
-        Blueprint: Configured Blueprint instance
-    """
-    bp = Blueprint('documents', __name__)
-    
-    @bp.route('/documents/upload', methods=['POST'])
-    def upload_document():
-        """Handle file uploads."""
-        result = document_controller.upload_file()
-        if isinstance(result, tuple):
-            return jsonify(result[0]), result[1]
-        return jsonify(result)
-    
-    @bp.route('/documents/process-url', methods=['POST'])
-    def process_url():
-        """Process a web page URL."""
-        data = request.get_json() or {}
-        result = document_controller.process_url(data)
-        if isinstance(result, tuple):
-            return jsonify(result[0]), result[1]
-        return jsonify(result)
-    
-    @bp.route('/documents/process-directory', methods=['POST'])
-    def process_directory():
-        """Process all supported documents in a directory."""
-        data = request.get_json() or {}
-        result = document_controller.process_directory(data)
-        if isinstance(result, tuple):
-            return jsonify(result[0]), result[1]
-        return jsonify(result)
-    
-    @bp.route('/documents/supported-formats', methods=['GET'])
-    def get_supported_formats():
-        """Get the list of supported document formats."""
-        return jsonify({
-            'success': True,
-            'formats': [
-                {
-                    'type': 'PDF',
-                    'extensions': ['.pdf'],
-                    'description': 'Portable Document Format'
-                },
-                {
-                    'type': 'Text',
-                    'extensions': ['.txt', '.md'],
-                    'description': 'Plain text and markdown files'
-                },
-                {
-                    'type': 'JSON',
-                    'extensions': ['.json'],
-                    'description': 'JavaScript Object Notation'
-                },
-                {
-                    'type': 'Web Page',
-                    'extensions': ['http://', 'https://'],
-                    'description': 'Web page URLs'
-                }
-            ]
-        })
-    
-    return bp
+        with open(file_path, "wb") as buffer:
+            content = await file.read()
+            buffer.write(content)
+        
+        # Process the file
+        result = controller.upload_file(file_path)
+        
+        # Clean up the temporary file
+        try:
+            os.remove(file_path)
+        except Exception:
+            pass
+            
+        return _handle_controller_result(result)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/documents/process-url")
+async def process_url(
+    data: Dict[str, Any] = Body(...),
+    controller: DocumentController = Depends(get_document_controller)
+):
+    """Process a web page URL."""
+    try:
+        result = controller.process_url(data)
+        return _handle_controller_result(result)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/documents/process-directory")
+async def process_directory(
+    data: Dict[str, Any] = Body(...),
+    controller: DocumentController = Depends(get_document_controller)
+):
+    """Process all supported documents in a directory."""
+    try:
+        result = controller.process_directory(data)
+        return _handle_controller_result(result)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/documents/supported-formats")
+async def get_supported_formats():
+    """Get the list of supported document formats."""
+    return {
+        'success': True,
+        'formats': [
+            {
+                'type': 'PDF',
+                'extensions': ['.pdf'],
+                'description': 'Portable Document Format'
+            },
+            {
+                'type': 'Text',
+                'extensions': ['.txt', '.md'],
+                'description': 'Plain text and markdown files'
+            },
+            {
+                'type': 'JSON',
+                'extensions': ['.json'],
+                'description': 'JavaScript Object Notation'
+            },
+            {
+                'type': 'Web Page',
+                'extensions': ['http://', 'https://'],
+                'description': 'Web page URLs'
+            }
+        ]
+    }

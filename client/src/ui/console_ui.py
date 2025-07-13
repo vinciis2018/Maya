@@ -104,6 +104,14 @@ Commands:
             message: Warning message to print
         """
         self.console.print(f"[yellow]Warning: {message}[/yellow]")
+        
+    def show_typing(self) -> None:
+        """Show a typing indicator."""
+        self.console.print("Maya is typing... ", end="", style="dim")
+        
+    def hide_typing(self) -> None:
+        """Hide the typing indicator by moving to a new line."""
+        self.console.print()  # Just print a newline to clear the typing indicator
     
     def print_success(self, message: str) -> None:
         """Print a success message.
@@ -112,6 +120,24 @@ Commands:
             message: Success message to print
         """
         self.console.print(f"[green]✓ {message}[/green]")
+        
+    def print_assistant_message(self, message: str, agent_name: str = "Maya") -> None:
+        """Print a message from the assistant with proper formatting.
+        
+        Args:
+            message: The message to display
+            agent_name: Name of the assistant (default: "Maya")
+        """
+        # Create a panel for the assistant's message
+        panel = Panel(
+            message,
+            title=f"{agent_name}",
+            title_align="left",
+            border_style="blue",
+            padding=(1, 2),
+            expand=False
+        )
+        self.console.print(panel)
     
     def clear_screen(self) -> None:
         """Clear the console screen."""

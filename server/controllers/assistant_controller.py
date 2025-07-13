@@ -1,5 +1,6 @@
-from flask import jsonify, request
-from typing import Dict, Any, Optional, List
+from fastapi import APIRouter, Depends, HTTPException, Request
+from typing import Dict, Any, List, Optional
+from pydantic import BaseModel
 import time
 from datetime import datetime, timedelta
 import logging
@@ -7,6 +8,34 @@ import logging
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Request/Response Models
+class PersonalityResponse(BaseModel):
+    personalities: Dict[str, Any]
+
+class NewConversationResponse(BaseModel):
+    status: str
+    conversation_id: str
+
+class ConversationResponse(BaseModel):
+    status: str
+    conversation_id: str
+    history: List[Dict[str, Any]]
+
+class MessageRequest(BaseModel):
+    message: str
+    conversation_id: str
+    personality: Optional[str] = None
+
+class MessageResponse(BaseModel):
+    status: str
+    response: str
+    conversation_id: str
+    timestamp: float
+
+class ErrorResponse(BaseModel):
+    status: str
+    message: str
 
 class AssistantController:
     """Controller for handling assistant requests with enhanced context awareness."""
@@ -16,54 +45,151 @@ class AssistantController:
         self.min_relevance_score = 0.3  # Minimum relevance score for context inclusion
         self.max_context_memories = 5    # Maximum number of context memories to include
         
-    def get_personalities(self) -> Dict[str, Any]:
+    def get_agent_info(self) -> Dict[str, Any]:
+        """Get information about the agent."""
+        return {
+            "status": "success",
+            "agent_name": self.assistant.agent_name,
+            "personalities": self.assistant.get_personalities(),
+            "capabilities": ["chat", "context_awareness", "memory"]
+        }
+        
+    def get_personalities(self) -> PersonalityResponse:
         """Get available personalities."""
         personalities = self.assistant.get_personalities()
-        return jsonify({'personalities': personalities})
+        return PersonalityResponse(personalities=personalities)
         
-    def new_conversation(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    def new_conversation(self) -> NewConversationResponse:
         """Start a new conversation."""
-        conversation_id = self.assistant.start_new_conversation()
-        return jsonify({
-            'status': 'success',
-            'conversation_id': conversation_id
-        })
+        success = self.assistant.start_new_conversation()
+        if not success or not self.assistant.current_conversation_id:
+            raise HTTPException(status_code=500, detail="Failed to start a new conversation")
+            
+        return NewConversationResponse(
+            status="success",
+            conversation_id=self.assistant.current_conversation_id
+        )
         
-    def load_conversation(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    def load_conversation(self, conversation_id: str) -> ConversationResponse:
         """Load an existing conversation."""
-        conversation_id = data.get('conversation_id')
         if not conversation_id:
-            return jsonify({'status': 'error', 'message': 'No conversation_id provided'}), 400
+            raise HTTPException(status_code=400, detail="No conversation_id provided")
             
         success = self.assistant.load_conversation(conversation_id)
         if not success:
-            return jsonify({'status': 'error', 'message': 'Conversation not found'}), 404
+            raise HTTPException(status_code=404, detail="Conversation not found")
             
         # Get conversation history for context
         history = self.assistant.get_conversation_history()
         
-        return jsonify({
-            'status': 'success',
-            'conversation_id': conversation_id,
-            'history': history
-        })
+        return ConversationResponse(
+            status="success",
+            conversation_id=conversation_id,
+            history=history
+        )
 
-    def set_personality(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    def set_personality(self, personality: str) -> Dict[str, str]:
         """Set the assistant's personality."""
-        personality = data.get('personality')
         if not personality:
-            return jsonify({'status': 'error', 'message': 'No personality specified'}), 400
+            raise HTTPException(status_code=400, detail="No personality specified")
             
         success = self.assistant.set_personality(personality)
         if not success:
-            return jsonify({'status': 'error', 'message': 'Invalid personality'}), 400
+            raise HTTPException(status_code=400, detail="Invalid personality")
             
-        return jsonify({
-            'status': 'success',
-            'personality': personality,
-            'message': f'Personality set to {personality}'
-        })
+        return {
+            "status": "success",
+            "personality": personality,
+            "message": f"Personality set to {personality}"
+        }
 
+    def chat(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Process a chat message and return the assistant's response.
+        
+        If no conversation_id is provided, a new conversation will be created.
+        """
+        try:
+            message = data.get('message', '').strip()
+            conversation_id = data.get('conversation_id')
+            personality = data.get('personality')
+            
+            if not message:
+                raise HTTPException(status_code=400, detail="Message cannot be empty")
+                
+            # Create a new conversation if no ID is provided
+            if not conversation_id:
+                new_conv = self.new_conversation()
+                conversation_id = new_conv.conversation_id
+                logger.info(f"Created new conversation: {conversation_id}")
+                
+            # Set personality if provided
+            if personality:
+                self.set_personality(personality)
+            
+            # Load the conversation to ensure it exists
+            try:
+                self.assistant.load_conversation(conversation_id)
+            except Exception as e:
+                logger.warning(f"Failed to load conversation {conversation_id}, creating new one")
+                new_conv = self.new_conversation()
+                conversation_id = new_conv.conversation_id
+            
+            # Get relevant context
+            context = self._get_relevant_context(message, conversation_id)
+            
+            # Process the input using the assistant
+            result = self.assistant.process_input(
+                user_input=message,
+                conversation_id=conversation_id,
+                use_memory=bool(context)  # Use memory if context was provided
+            )
+            
+            # Extract the response from the result
+            if not result or 'response' not in result:
+                raise HTTPException(status_code=500, detail="Failed to generate response")
+                
+            return {
+                'status': 'success',
+                'response': result['response'],
+                'conversation_id': result.get('conversation_id', conversation_id),
+                'timestamp': time.time()
+            }
+            
+        except Exception as e:
+            logger.error(f"Error processing chat message: {str(e)}")
+            raise HTTPException(status_code=500, detail=str(e))
+            
+    def process_message(self, request: MessageRequest) -> MessageResponse:
+        """Process a user message and return the assistant's response."""
+        try:
+            # Set personality if provided
+            if request.personality:
+                self.set_personality(request.personality)
+            
+            # Get relevant context
+            context = self._get_relevant_context(
+                request.message, 
+                request.conversation_id
+            )
+            
+            # Process the message with context
+            response = self.assistant.process_message(
+                message=request.message,
+                conversation_id=request.conversation_id,
+                context=context
+            )
+            
+            return MessageResponse(
+                status="success",
+                response=response,
+                conversation_id=request.conversation_id,
+                timestamp=time.time()
+            )
+            
+        except Exception as e:
+            logger.error(f"Error processing message: {str(e)}")
+            raise HTTPException(status_code=500, detail=str(e))
+    
     def _get_relevant_context(self, user_input: str, conversation_id: str) -> str:
         """Retrieve relevant context from memory store."""
         try:
@@ -103,48 +229,5 @@ class AssistantController:
             ])
             
         except Exception as e:
-            logger.error(f"Error retrieving context: {str(e)}")
+            logger.error(f"Error getting context: {str(e)}")
             return ""
-
-    def chat(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """Process a chat message with enhanced context awareness."""
-        user_input = data.get('message', '').strip()
-        if not user_input:
-            return jsonify({
-                'status': 'error',
-                'message': 'Empty message'
-            }), 400
-        
-        # Get or create conversation ID
-        conversation_id = data.get('conversation_id')
-        if not conversation_id:
-            conversation_id = self.assistant.start_new_conversation()
-        
-        # Get relevant context from memory
-        context = self._get_relevant_context(user_input, conversation_id)
-        
-        try:
-            # Process the input with context
-            response = self.assistant.process_input(
-                user_input=user_input,
-                conversation_id=conversation_id,
-                use_memory=True
-            )
-            
-            # Extract response text and metadata
-            response_text = response.get('response', '')
-            
-            return jsonify({
-                'status': 'success',
-                'response': response_text,
-                'conversation_id': conversation_id,
-                'context_used': bool(context)
-            })
-            
-        except Exception as e:
-            logger.error(f"Error processing message: {str(e)}")
-            return jsonify({
-                'status': 'error',
-                'message': 'Error processing your message',
-                'conversation_id': conversation_id
-            }), 500

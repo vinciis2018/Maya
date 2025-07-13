@@ -1,25 +1,29 @@
 {
   "response_style": {
-    "formality": 0.5,
+    "formality": 0.55,
     "verbosity": 0.5,
     "humor_level": 0.3
   },
   "topics_of_interest": {
-    "technology": 0.23539381258179548,
-    "food": 0.0495
+    "technology": 0.3013900164848308,
+    "food": 0.13852823587134439,
+    "sports": 0.047549502495
   },
-  "preferred_response_length": 122.978013055,
+  "preferred_response_length": 64.00784529542504,
   "communication_patterns": {
     "active_hours": {
       "5": 5,
       "6": 1,
-      "7": 3
+      "7": 3,
+      "13": 6,
+      "14": 6
     },
     "common_phrases": {},
     "recent_messages": [
-      "What is quantum physics"
+      "hello maya",
+      "stop"
     ]
   },
-  "last_updated": "2025-07-13T07:26:01.247262",
-  "interaction_count": 9
+  "last_updated": "2025-07-13T14:33:30.703543",
+  "interaction_count": 21
 }

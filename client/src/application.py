@@ -91,11 +91,22 @@ class Application:
         """Display the welcome message and initial help."""
         from rich.panel import Panel
         from rich.text import Text
+        from rich.console import Group
         
         # Welcome message
         welcome_msg = Text("\nWelcome to ", style="bold")
         welcome_msg.append("Maya", style="bold blue")
         welcome_msg.append(", your personalized AI assistant!")
+        
+        # Get agent info
+        try:
+            agent_info = self.api_client.get_agent_info()
+            if agent_info and 'status' in agent_info and agent_info['status'] == 'success':
+                agent_name = agent_info.get('agent_name', 'Maya')
+                welcome_msg = Text(f"\nWelcome to {agent_name}, your personalized AI assistant!", style="bold")
+        except Exception as e:
+            self.ui.print_error(f"Could not connect to server: {str(e)}")
+            self.ui.print_message("Starting in offline mode...")
         
         # Memory status
         memory_status = "[green]ENABLED" if self.config.get('memory', {}).get('enabled', True) else "[red]DISABLED"
@@ -143,24 +154,43 @@ class Application:
             except Exception as e:
                 self.ui.print_error(f"An error occurred: {str(e)}")
     
-    def _handle_new_conversation(self):
-        """Handle starting a new conversation."""
-        if self.api_client.new_conversation():
-            self.ui.print_success("Started a new conversation")
-        else:
-            self.ui.print_error("Failed to start a new conversation")
+    def _start_new_conversation(self):
+        """Start a new conversation with the AI."""
+        try:
+            response = self.api_client.new_conversation()
+            if 'conversation_id' in response:
+                self.current_conversation_id = response['conversation_id']
+                self.ui.print_success(f"Started a new conversation! (ID: {self.current_conversation_id})")
+                return True
+            else:
+                self.ui.print_error("Failed to start a new conversation: Invalid response from server")
+                return False
+        except Exception as e:
+            self.ui.print_error(f"Error starting new conversation: {str(e)}")
+            return False
     
-    def _handle_load_conversation(self, conversation_id: str):
-        """Handle loading a previous conversation."""
-        if not conversation_id:
-            self.ui.print_error("Please specify a conversation ID")
-            return
-            
-        if self.api_client.load_conversation(conversation_id):
-            self.current_conversation_id = conversation_id
-            self.ui.print_success(f"Loaded conversation {conversation_id}")
-        else:
-            self.ui.print_error(f"Failed to load conversation {conversation_id}")
+    def _load_conversation(self, conversation_id: str):
+        """Load a previous conversation by ID."""
+        try:
+            response = self.api_client.load_conversation(conversation_id)
+            if 'status' in response and response['status'] == 'success':
+                self.current_conversation_id = conversation_id
+                self.ui.print_success(f"Loaded conversation: {conversation_id}")
+                
+                # Display conversation history if available
+                if 'history' in response and response['history']:
+                    self.ui.print_message("\nRecent conversation history:")
+                    for msg in response['history'][-5:]:  # Show last 5 messages
+                        role = "You" if msg.get('role') == 'user' else "AI"
+                        self.ui.print_message(f"{role}: {msg.get('content', '')}")
+                return True
+            else:
+                error_msg = response.get('message', 'Unknown error')
+                self.ui.print_error(f"Failed to load conversation: {error_msg}")
+                return False
+        except Exception as e:
+            self.ui.print_error(f"Error loading conversation: {str(e)}")
+            return False
     
     def _handle_switch_personality(self):
         """Handle switching the AI's personality."""
@@ -199,10 +229,10 @@ class Application:
         if cmd == 'exit':
             self.running = False
         elif cmd == 'new':
-            self._handle_new_conversation()
+            self._start_new_conversation()
         elif cmd.startswith('load '):
             conv_id = cmd[5:].strip()
-            self._handle_load_conversation(conv_id)
+            self._load_conversation(conv_id)
         elif cmd == 'personality':
             self._handle_switch_personality()
         elif cmd == 'voice':
@@ -213,6 +243,9 @@ class Application:
             self._handle_voice_training()
         elif cmd == 'helpcmd':
             self._show_help()
+        elif cmd == 'stop':
+            self.tts.stop()
+            self.ui.print_success("Stopped current speech")
         else:
             self.ui.print_error(f"Unknown command: {cmd}")
 
@@ -289,88 +322,45 @@ class Application:
         except Exception as e:
             self.ui.print_error(f"Error during voice training: {str(e)}")
     
-    def _handle_voice_training(self):
-        """Handle voice training flow."""
-        self.ui.print_message("\nVoice Training")
-        self.ui.print_message("-------------")
-        
-        # Get or create speaker ID
-        speaker_id = self.ui.get_user_input("Enter your name (for voice recognition): ").strip()
-        if not speaker_id:
-            self.ui.print_error("Name cannot be empty")
-            return
-            
-        # Sample text for training
-        sample_text = (
-            "The quick brown fox jumps over the lazy dog. "
-            "Pack my box with five dozen liquor jugs. "
-            "How vexingly quick daft zebras jump!"
-        )
-        
-        self.ui.print_message("\nPlease read the following text when prompted:")
-        self.ui.print_message(f"\n{sample_text}")
-        
-        if not self.ui.confirm("\nReady to begin?"):
-            return
-            
-        try:
-            if self.voice_trainer.train_speaker(speaker_id, sample_text):
-                self.ui.print_success("Voice training completed successfully!")
-            else:
-                self.ui.print_error("Voice training failed")
-        except Exception as e:
-            self.ui.print_error(f"Error during voice training: {str(e)}")
-    
     def _handle_chat_message(self, message: str):
         """Handle sending a chat message to the AI."""
         if not message.strip():
             return
             
         try:
-            # Check for stop command
-            if message.strip().lower() == 'stop':
-                self.tts.stop()
-                self.ui.print_message("\nStopping speech...")
-                return
-                
-            # Show user message
-            self.ui.print_message(f"\nYou: {message}")
-            # Show AI prefix without newline
-            self.ui.print_message("Maya: ", end="")
+            # Show typing indicator
+            self.ui.show_typing()
             
-            # Send to server
-            response = self.api_client.chat(message)
+            # Send the message to the AI with the current conversation ID
+            response = self.api_client.chat(
+                message=message,
+                conversation_id=self.current_conversation_id
+            )
             
-            # Update conversation ID if needed
-            if 'conversation_id' in response:
-                self.current_conversation_id = response['conversation_id']
+            # Hide typing indicator
+            self.ui.hide_typing()
+            
+            # Handle the response
+            if response and isinstance(response, dict):
+                # Update conversation ID if this is a new conversation
+                if 'conversation_id' in response and response['conversation_id']:
+                    self.current_conversation_id = response['conversation_id']
                 
-            # Extract the response text
-            if isinstance(response, dict):
-                # If the response has a 'response' key, use that
-                if 'response' in response:
-                    response_text = response['response']
-                    # If the response is a string, clean it up
-                    if isinstance(response_text, str):
-                        # Remove any leading 'Maya:' or 'AI:' prefix if present
-                        message_content = response_text.split(':', 1)[-1].strip()
-                    else:
-                        message_content = str(response_text)
-                else:
-                    # If no 'response' key, convert the whole response to string
-                    message_content = str(response)
+                # Check if we have a response to display
+                if 'response' in response and response['response']:
+                    # Display the response using the console UI
+                    self.ui.print_assistant_message(response['response'])
+                    
+                    # Speak the response if voice is enabled
+                    if self.config.voice_output_enabled:
+                        self.tts.speak(response['response'])
             else:
-                # If response is not a dict, convert to string
-                message_content = str(response)
-                
-            self.ui.print_message(f"{message_content}")
-            
-            # Speak the response if voice is enabled
-            if self.config.voice_output_enabled:
-                self.tts.speak(message_content)
+                error_msg = response.get('message', 'No response from the AI')
+                self.ui.print_error(f"Error: {error_msg}")
                 
         except Exception as e:
-            self.ui.print_error(f"Error communicating with server: {str(e)}")
+            self.ui.hide_typing()
+            self.ui.print_error(f"Error processing message: {str(e)}")
 
 def main():
     """Entry point for the application."""
