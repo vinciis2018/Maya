@@ -114,20 +114,26 @@ class AIAssistant:
             metadata=metadata
         )
     
-    def search_memories(self, query: str, conversation_id: Optional[str] = None, limit: int = 5) -> List[Dict[str, Any]]:
+    def search_memories(self, query: str, conversation_id: Optional[str] = None, 
+                      limit: int = 5, search_type: str = 'hybrid', 
+                      min_score: float = 0.1) -> List[Dict[str, Any]]:
         """Search for relevant memories.
         
         Args:
             query: Search query
             conversation_id: Optional conversation ID to filter by
             limit: Maximum number of results to return
+            search_type: Type of search - 'hybrid', 'semantic', or 'keyword'
+            min_score: Minimum relevance score for results
             
         Returns:
-            List of relevant memories with scores
+            List of relevant memories with scores and search types
         """
         return self.memory_store.search_memories(
             query=query,
             conversation_id=conversation_id,
+            search_type=search_type,
+            min_score=min_score,
             limit=limit
         )
     

@@ -70,7 +70,12 @@ class Application:
             ("voicecmd", "Record and process voice command"),
             ("voicetrain", "Train the voice recognition system"),
             ("stop", "Stop current speech output"),
-            ("exit", "Exit the application")
+            ("exit", "Exit the application"),
+            ("", ""),  # Empty line for separation
+            ("[bold]Search Commands:[/bold]", ""),
+            ("find <query>", "Hybrid search (semantic + keyword) for information"),
+            ("semantic <query>", "Semantic search using AI embeddings"),
+            ("keyword <query>", "Keyword search using exact matches")
         ]
         
         for cmd, desc in commands:
@@ -224,6 +229,61 @@ class Application:
         status = "enabled" if not current else "disabled"
         self.ui.print_success(f"Voice output {status}")
     
+    def _handle_search(self, query: str, search_type: str = 'hybrid'):
+        """Handle search commands.
+        
+        Args:
+            query: The search query
+            search_type: Type of search ('hybrid', 'semantic', or 'keyword')
+        """
+        if not query:
+            self.ui.print_error("Please provide a search query")
+            return
+            
+        try:
+            self.ui.print_message(f"Searching {search_type} for: {query}")
+            
+            # Call the API client's search method
+            results = self.api_client.search(
+                query=query,
+                search_type=search_type,
+                conversation_id=self.current_conversation_id
+            )
+            
+            if not results:
+                self.ui.print_message("No results found.")
+                return
+                
+            # Display search results
+            from rich.panel import Panel
+            from rich.text import Text
+            
+            for i, result in enumerate(results, 1):
+                # Create a panel for each result
+                result_text = Text()
+                result_text.append(f"{i}. ", style="bold cyan")
+                result_text.append(f"({result.get('search_type', 'result').title()}) ", style="dim")
+                result_text.append(f"{result.get('text', '')}\n")
+                
+                # Add metadata if available
+                if 'metadata' in result and isinstance(result['metadata'], dict):
+                    meta = result['metadata']
+                    if 'source' in meta:
+                        result_text.append(f"  Source: {meta['source']}\n", style="dim")
+                    if 'timestamp' in meta:
+                        from datetime import datetime
+                        dt = datetime.fromtimestamp(meta['timestamp'])
+                        result_text.append(f"  Date: {dt.strftime('%Y-%m-%d %H:%M:%S')}\n", style="dim")
+                
+                self.ui.console.print(Panel(
+                    result_text,
+                    border_style="blue",
+                    padding=(0, 1)
+                ))
+                
+        except Exception as e:
+            self.ui.print_error(f"Error performing search: {str(e)}")
+    
     def _process_command(self, cmd):
         """Process a command without showing it in chat or sending to AI."""
         if cmd == 'exit':
@@ -246,6 +306,13 @@ class Application:
         elif cmd == 'stop':
             self.tts.stop()
             self.ui.print_success("Stopped current speech")
+        # Search commands
+        elif cmd.startswith('find ') and len(cmd) > 5:
+            self._handle_search(cmd[5:].strip(), 'hybrid')
+        elif cmd.startswith('semantic ') and len(cmd) > 9:
+            self._handle_search(cmd[9:].strip(), 'semantic')
+        elif cmd.startswith('keyword ') and len(cmd) > 8:
+            self._handle_search(cmd[8:].strip(), 'keyword')
         else:
             self.ui.print_error(f"Unknown command: {cmd}")
 

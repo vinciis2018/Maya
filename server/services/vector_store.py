@@ -244,37 +244,244 @@ class VectorMemoryStore:
         if current_time is None:
             current_time = time.time()
             
-        # Time-based decay
-        time_factor = self._calculate_time_decay(metadata['timestamp'], current_time)
+        # Time decay factor (0-1)
+        timestamp = metadata.get('timestamp', current_time)
+        time_factor = self._calculate_time_decay(timestamp, current_time)
         
-        # Recency boost for recently accessed memories
-        recency_factor = 0.0
-        if 'last_accessed' in metadata:
-            recency_factor = self._calculate_time_decay(metadata['last_accessed'], current_time)
-        
-        # Frequency boost for frequently accessed memories
-        frequency_factor = 0.0
-        if 'access_count' in metadata and metadata['access_count'] > 0:
-            frequency_factor = 1.0 - (1.0 / (1.0 + metadata['access_count']))
+        # Access frequency factor (0-1)
+        access_count = metadata.get('access_count', 0)
+        frequency_factor = 1.0 - (1.0 / (1.0 + access_count))
         
         # Combine factors with weights
-        # Weights can be tuned based on application needs
         weights = {
             'similarity': 0.6,
             'time': 0.2,
-            'recency': 0.1,
-            'frequency': 0.1
+            'frequency': 0.2
         }
         
         score = (
             weights['similarity'] * similarity +
             weights['time'] * time_factor +
-            weights['recency'] * recency_factor +
             weights['frequency'] * frequency_factor
         )
         
         # Ensure score is in valid range
         return max(0.0, min(1.0, score))
+        
+    def _bm25_similarity(self, query: str, document: str) -> float:
+        """Calculate BM25 similarity between query and document.
+        
+        This is a simplified implementation of BM25 scoring.
+        """
+        # Tokenize (simple whitespace tokenizer for this example)
+        query_terms = query.lower().split()
+        doc_terms = document.lower().split()
+        
+        if not query_terms or not doc_terms:
+            return 0.0
+            
+        # Term frequencies in document
+        tf = {}
+        for term in doc_terms:
+            tf[term] = tf.get(term, 0) + 1
+            
+        # Calculate IDF (inverse document frequency) - simplified
+        doc_count = len(self.documents)
+        idf = {}
+        for term in set(query_terms):
+            # Count documents containing the term
+            doc_freq = sum(1 for doc in self.documents if term in doc.lower())
+            idf[term] = np.log((doc_count - doc_freq + 0.5) / (doc_freq + 0.5) + 1.0)
+            
+        # BM25 parameters
+        k1 = 1.5
+        b = 0.75
+        avg_doc_len = sum(len(doc.split()) for doc in self.documents) / max(1, len(self.documents))
+        doc_len = len(doc_terms)
+        
+        # Calculate BM25 score
+        score = 0.0
+        for term in set(query_terms):
+            if term not in tf:
+                continue
+                
+            # Term frequency component
+            tf_component = (tf[term] * (k1 + 1)) / (tf[term] + k1 * (1 - b + b * doc_len / avg_doc_len))
+            
+            # Add to score
+            score += idf.get(term, 0) * tf_component
+            
+        return float(score)
+        
+    def search_memories(self, query: str, conversation_id: Optional[str] = None, 
+                       limit: int = 5, search_type: str = 'hybrid',
+                       min_score: float = 0.1) -> List[Dict[str, Any]]:
+        """Search for relevant memories using hybrid search.
+        
+        Args:
+            query: The search query
+            conversation_id: Optional conversation ID to filter by
+            limit: Maximum number of results to return
+            search_type: Type of search - 'hybrid', 'semantic', or 'keyword'
+            min_score: Minimum relevance score for results
+            
+        Returns:
+            List of relevant memories with scores and search types
+        """
+        if not query or not self.documents:
+            return []
+            
+        current_time = time.time()
+        results = []
+        
+        # Get indices of documents to search
+        indices = range(len(self.documents))
+        if conversation_id is not None:
+            indices = self.conversation_maps.get(conversation_id, [])
+            
+        # Get query embedding if doing semantic or hybrid search
+        if search_type in ['hybrid', 'semantic'] and self._transformers_available:
+            try:
+                query_embedding = self.embedding_model.encode(
+                    [query], 
+                    convert_to_numpy=True,
+                    show_progress_bar=False
+                )
+                
+                # Calculate semantic similarities
+                for idx in indices:
+                    if 0 <= idx < len(self.embeddings):
+                        # Calculate cosine similarity
+                        similarity = cosine_similarity(
+                            query_embedding, 
+                            [self.embeddings[idx]]
+                        )[0][0]
+                        
+                        # Store result with relevance score
+                        metadata = self.metadatas[idx].copy()
+                        metadata['search_type'] = 'semantic'
+                        
+                        results.append({
+                            'text': self.documents[idx],
+                            'metadata': metadata,
+                            'score': self._calculate_relevance_score(
+                                similarity=similarity,
+                                metadata=metadata,
+                                current_time=current_time
+                            ),
+                            'search_type': 'semantic'
+                        })
+                
+                # Sort semantic results by score
+                results.sort(key=lambda x: x['score'], reverse=True)
+                
+                # If we only want semantic results, return them now
+                if search_type == 'semantic':
+                    return [{
+                        'text': r['text'],
+                        'metadata': r['metadata'],
+                        'score': r['score'],
+                        'search_type': 'semantic'
+                    } for r in results if r['score'] >= min_score][:limit]
+                    
+            except Exception as e:
+                logger.error(f"Error in semantic search: {str(e)}")
+                if search_type == 'semantic':
+                    return []
+        
+        # If we're doing keyword or hybrid search, calculate BM25 scores
+        if search_type in ['hybrid', 'keyword']:
+            keyword_results = []
+            
+            for idx in indices:
+                if 0 <= idx < len(self.documents):
+                    # Calculate BM25 score
+                    score = self._bm25_similarity(query, self.documents[idx])
+                    
+                    # Store result with relevance score
+                    metadata = self.metadatas[idx].copy()
+                    metadata['search_type'] = 'keyword'
+                    
+                    keyword_results.append({
+                        'text': self.documents[idx],
+                        'metadata': metadata,
+                        'score': score,
+                        'search_type': 'keyword'
+                    })
+            
+            # Sort keyword results by score
+            keyword_results.sort(key=lambda x: x['score'], reverse=True)
+            
+            # If we only want keyword results, return them now
+            if search_type == 'keyword':
+                return [{
+                    'text': r['text'],
+                    'metadata': r['metadata'],
+                    'score': r['score'],
+                    'search_type': 'keyword'
+                } for r in keyword_results if r['score'] >= min_score][:limit]
+                
+            # For hybrid search, combine and re-rank results
+            elif search_type == 'hybrid' and results:
+                # Normalize scores to the same range (0-1)
+                if results:
+                    max_semantic = max(r['score'] for r in results) or 1.0
+                    for r in results:
+                        r['normalized_score'] = r['score'] / max_semantic
+                        
+                if keyword_results:
+                    max_keyword = max(r['score'] for r in keyword_results) or 1.0
+                    for r in keyword_results:
+                        r['normalized_score'] = r['score'] / max_keyword
+                
+                # Combine results, preferring semantic matches
+                combined = {}
+                
+                # Add semantic results first
+                for i, r in enumerate(results[:limit*2]):
+                    doc_id = r['text'][:100]  # Use text as ID for deduplication
+                    if doc_id not in combined:
+                        combined[doc_id] = {
+                            'text': r['text'],
+                            'metadata': r['metadata'],
+                            'score': r['normalized_score'] * 0.7,  # Higher weight to semantic
+                            'search_type': 'semantic',
+                            'combined_score': r['normalized_score'] * 0.7
+                        }
+                
+                # Add keyword results, combining with semantic if exists
+                for i, r in enumerate(keyword_results[:limit*2]):
+                    doc_id = r['text'][:100]  # Use text as ID for deduplication
+                    if doc_id in combined:
+                        # If we already have a semantic match, boost its score
+                        combined[doc_id]['score'] += r['normalized_score'] * 0.3
+                        combined[doc_id]['search_type'] = 'hybrid'
+                    else:
+                        combined[doc_id] = {
+                            'text': r['text'],
+                            'metadata': r['metadata'],
+                            'score': r['normalized_score'] * 0.5,  # Lower weight for keyword-only
+                            'search_type': 'keyword',
+                            'combined_score': r['normalized_score'] * 0.5
+                        }
+                
+                # Sort by combined score
+                sorted_results = sorted(
+                    combined.values(), 
+                    key=lambda x: x['score'], 
+                    reverse=True
+                )
+                
+                # Return top results above min_score
+                return [{
+                    'text': r['text'],
+                    'metadata': r['metadata'],
+                    'score': r['score'],
+                    'search_type': r['search_type']
+                } for r in sorted_results if r['score'] >= min_score][:limit]
+        
+        # Fallback to empty list if no results
+        return []
     
     def _update_access_stats(self, idx: int, current_time: Optional[float] = None) -> None:
         """Update access statistics for a memory.
@@ -289,103 +496,7 @@ class VectorMemoryStore:
         if 0 <= idx < len(self.metadatas):
             self.metadatas[idx]['last_accessed'] = current_time
             self.metadatas[idx]['access_count'] = self.metadatas[idx].get('access_count', 0) + 1
-    
-    def search_memories(self, 
-                       query: str, 
-                       conversation_id: Optional[str] = None, 
-                       limit: int = 5,
-                       min_score: float = 0.3) -> List[Dict]:
-        """Search for similar memories with enhanced relevance scoring.
-        
-        Args:
-            query: The search query
-            conversation_id: Optional conversation ID to filter by
-            limit: Maximum number of results to return
-            min_score: Minimum relevance score (0-1) for results
-            
-        Returns:
-            List of dictionaries containing memory text, metadata, and relevance score
-        """
-        if not self.embeddings:
             return []
-            
-        current_time = time.time()
-        
-        # Filter by conversation if specified
-        indices = list(range(len(self.embeddings)))
-        if conversation_id is not None:
-            indices = self.conversation_maps.get(conversation_id, [])
-            if not indices:
-                return []
-        
-        results = []
-        
-        # If we have embeddings, use semantic search
-        if self._transformers_available and self.embeddings[0] is not None:
-            try:
-                # Get query embedding
-                query_embedding = self.embedding_model.encode(query, convert_to_numpy=True)
-                
-                # Calculate similarities and relevance scores
-                for idx in indices:
-                    if self.embeddings[idx] is not None:
-                        # Calculate cosine similarity
-                        similarity = cosine_similarity(
-                            query_embedding.reshape(1, -1),
-                            self.embeddings[idx].reshape(1, -1)
-                        )[0][0]
-                        
-                        # Calculate combined relevance score
-                        relevance = self._calculate_relevance_score(
-                            similarity=similarity,
-                            metadata=self.metadatas[idx],
-                            current_time=current_time
-                        )
-                        
-                        if relevance >= min_score:
-                            results.append({
-                                'text': self.documents[idx],
-                                'metadata': self.metadatas[idx],
-                                'similarity': similarity,
-                                'relevance': relevance,
-                                'index': idx
-                            })
-                
-            except Exception as e:
-                logger.error(f"Error in semantic search: {str(e)}")
-                # Fall through to text-based search
-        
-        # Fallback to text-based search if no semantic results
-        if not results:
-            query = query.lower()
-            for idx in indices:
-                text = self.documents[idx].lower()
-                if query in text:
-                    # Simple relevance score based on query term frequency
-                    term_freq = text.count(query)
-                    similarity = min(1.0, term_freq * 0.1)  # Cap at 1.0
-                    
-                    relevance = self._calculate_relevance_score(
-                        similarity=similarity,
-                        metadata=self.metadatas[idx],
-                        current_time=current_time
-                    )
-                    
-                    if relevance >= min_score:
-                        results.append({
-                            'text': self.documents[idx],
-                            'metadata': self.metadatas[idx],
-                            'similarity': similarity,
-                            'relevance': relevance,
-                            'index': idx
-                        })
-        
-        # Sort by relevance score (descending)
-        results.sort(key=lambda x: x['relevance'], reverse=True)
-        
-        # Update access stats for top results
-        for result in results[:limit]:
-            self._update_access_stats(result['index'], current_time)
         
         # Return results with limited fields
         return [{

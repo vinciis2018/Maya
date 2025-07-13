@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, Body
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel
+from typing import Dict, Any, List, Optional
 
 # Import the controller
 from server.controllers.assistant_controller import (
@@ -10,7 +11,10 @@ from server.controllers.assistant_controller import (
     ConversationResponse,
     MessageRequest,
     MessageResponse,
-    ErrorResponse
+    ErrorResponse,
+    SearchRequest,
+    SearchResult,
+    SearchResponse
 )
 
 router = APIRouter(prefix="/api")
@@ -59,6 +63,25 @@ async def chat(
     return controller.chat(data)
 
 # Add error handlers
+@router.post("/search", response_model=SearchResponse)
+async def search(
+    search_request: SearchRequest,
+    controller: AssistantController = Depends(get_assistant_controller)
+):
+    """Search for information in the knowledge base.
+    
+    Args:
+        search_request: The search request containing query and search type
+        
+    Returns:
+        Search results with relevance scores
+    """
+    return controller.search(
+        query=search_request.query,
+        search_type=search_request.search_type,
+        conversation_id=search_request.conversation_id
+    )
+
 @router.get("/health")
 async def health_check():
     """Health check endpoint."""

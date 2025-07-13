@@ -87,6 +87,26 @@ class APIClient:
             
         return self._request('POST', '/conversation/chat', json=payload)
     
+    def search(self, query: str, search_type: str = 'hybrid', conversation_id: Optional[str] = None) -> Dict[str, Any]:
+        """Search for information in the knowledge base.
+        
+        Args:
+            query: The search query
+            search_type: Type of search ('hybrid', 'semantic', or 'keyword')
+            conversation_id: Optional conversation ID to include in the search context
+            
+        Returns:
+            Search results as a list of dictionaries
+        """
+        payload = {
+            'query': query,
+            'search_type': search_type
+        }
+        if conversation_id:
+            payload['conversation_id'] = conversation_id
+            
+        return self._request('POST', '/search', json=payload)
+    
     def upload_document(self, file_path: Union[str, Path], metadata: Optional[Dict] = None) -> Dict[str, Any]:
         """Upload a document to the server.
         

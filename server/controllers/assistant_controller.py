@@ -37,6 +37,25 @@ class ErrorResponse(BaseModel):
     status: str
     message: str
 
+class SearchRequest(BaseModel):
+    query: str
+    search_type: str = 'hybrid'
+    conversation_id: Optional[str] = None
+    limit: int = 5
+    min_score: float = 0.1
+
+class SearchResult(BaseModel):
+    text: str
+    metadata: Dict[str, Any] = {}
+    score: float
+    search_type: str
+
+class SearchResponse(BaseModel):
+    status: str
+    results: List[SearchResult]
+    query: str
+    search_type: str
+
 class AssistantController:
     """Controller for handling assistant requests with enhanced context awareness."""
     
@@ -189,6 +208,70 @@ class AssistantController:
         except Exception as e:
             logger.error(f"Error processing message: {str(e)}")
             raise HTTPException(status_code=500, detail=str(e))
+    
+    def search(self, query: str, search_type: str = 'hybrid', 
+              conversation_id: Optional[str] = None) -> SearchResponse:
+        """Search for information in the knowledge base.
+        
+        Args:
+            query: The search query
+            search_type: Type of search ('hybrid', 'semantic', or 'keyword')
+            conversation_id: Optional conversation ID to include in the search context
+            
+        Returns:
+            SearchResponse with results
+        """
+        try:
+            logger.debug(f"Starting search with query: '{query}', type: {search_type}, conversation_id: {conversation_id}")
+            
+            if not query:
+                raise HTTPException(status_code=400, detail="No search query provided")
+                
+            # Validate search type
+            if search_type not in ['hybrid', 'semantic', 'keyword']:
+                error_msg = f"Invalid search type: {search_type}. Must be 'hybrid', 'semantic', or 'keyword'"
+                logger.error(error_msg)
+                raise HTTPException(status_code=400, detail=error_msg)
+            
+            logger.debug(f"Searching for query: {query}")
+            
+            # Perform the search
+            search_results = self.assistant.search_memories(
+                query=query,
+                conversation_id=conversation_id,
+                search_type=search_type
+            )
+            
+            logger.debug(f"Search returned {len(search_results)} results")
+            
+            # Convert to SearchResult objects
+            results = [
+                SearchResult(
+                    text=result.get('text', ''),
+                    metadata=result.get('metadata', {}),
+                    score=result.get('score', 0.0),
+                    search_type=result.get('search_type', search_type)
+                )
+                for result in search_results
+            ]
+            
+            logger.debug(f"Formatted {len(results)} search results")
+            
+            response = SearchResponse(
+                status="success",
+                results=results,
+                query=query,
+                search_type=search_type
+            )
+            
+            logger.debug(f"Returning search response with {len(results)} results")
+            return response
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Error performing search: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
     
     def _get_relevant_context(self, user_input: str, conversation_id: str) -> str:
         """Retrieve relevant context from memory store."""
