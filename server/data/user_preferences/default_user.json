@@ -1,0 +1,23 @@
+{
+  "response_style": {
+    "formality": 0.5,
+    "verbosity": 0.5,
+    "humor_level": 0.3
+  },
+  "topics_of_interest": {
+    "food": 0.0495,
+    "technology": 0.05
+  },
+  "preferred_response_length": 130.12,
+  "communication_patterns": {
+    "active_hours": {
+      "15": 2
+    },
+    "common_phrases": {},
+    "recent_messages": [
+      "What is HEDES?"
+    ]
+  },
+  "last_updated": "2025-07-13T15:05:19.567336",
+  "interaction_count": 2
+}

@@ -34,16 +34,16 @@ async def upload_document(
             content = await file.read()
             buffer.write(content)
         
-        # Process the file
-        result = controller.upload_file(file_path)
-        
-        # Clean up the temporary file
         try:
-            os.remove(file_path)
-        except Exception:
-            pass
-            
-        return _handle_controller_result(result)
+            # Process the file
+            result = await controller.upload_file(file_path)
+            return _handle_controller_result(result)
+        finally:
+            # Clean up the temporary file
+            try:
+                os.remove(file_path)
+            except Exception as e:
+                logger.error(f"Error cleaning up file {file_path}: {str(e)}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

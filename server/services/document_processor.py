@@ -146,7 +146,12 @@ class DocumentProcessor:
     """Main document processing class that handles multiple document types."""
     
     def __init__(self, vector_store):
-        self.vector_store = vector_store
+        # Create a separate vector store for documents
+        from ..services.vector_store import VectorMemoryStore
+        self.vector_store = VectorMemoryStore(
+            persist_directory=str(Path('data/document_store')),
+            model_name='all-MiniLM-L6-v2'  # Same model as main store for compatibility
+        )
         self.loaders = {
             '.pdf': PDFLoader(),
             '.txt': TextLoader(),
@@ -155,40 +160,51 @@ class DocumentProcessor:
             'web': WebPageLoader()
         }
     
-    def process_document(self, source: Union[str, Path, bytes], source_type: str = None) -> bool:
-        """Process a document and add it to the vector store.
+    async def process_file(self, file_path: Union[str, Path]) -> bool:
+        """Process a file and add it to the vector store.
         
         Args:
-            source: Path to document, URL, or raw bytes
-            source_type: Optional type hint ('pdf', 'web', 'text')
+            file_path: Path to the file to process
             
         Returns:
             bool: True if processing was successful
         """
         try:
+            file_path = Path(file_path)
+            if not file_path.exists():
+                logger.error(f"File not found: {file_path}")
+                return False
+                
+            # Get file extension
+            ext = file_path.suffix.lower()
+            
             # Determine the loader to use
-            loader = self._get_loader(source, source_type)
+            loader = self._get_loader(file_path, source_type=ext[1:] if ext else None)
             if not loader:
-                logger.error(f"No suitable loader found for source: {source}")
+                logger.error(f"No suitable loader found for file: {file_path}")
                 return False
             
             # Load and process the document
-            documents = loader.load(source)
+            documents = loader.load(file_path)
             
             # Add to vector store
             for doc in documents:
                 # Add document metadata to the text to improve search relevance
-                doc_text = f"Document: {doc['metadata'].get('title', 'Document')}\n\n{doc['text']}"
+                doc_text = f"Document: {doc['metadata'].get('title', file_path.name)}\n\n{doc['text']}"
                 self.vector_store.add_memory(
                     conversation_id='documents',
                     text=doc_text,
-                    metadata=doc['metadata']
+                    metadata={
+                        **doc['metadata'],
+                        'source': str(file_path),
+                        'type': 'document'
+                    }
                 )
             
             return True
             
         except Exception as e:
-            logger.error(f"Error processing document: {str(e)}")
+            logger.error(f"Error processing file {file_path}: {str(e)}")
             return False
     
     def _get_loader(self, source: Union[str, Path, bytes], source_type: str = None):

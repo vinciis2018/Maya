@@ -142,21 +142,55 @@ class AIAssistant:
         Returns:
             str: Formatted context string with relevant information
         """
+        from pathlib import Path
         context_parts = []
         
-        # 1. Get semantic search results for the current query
+        # 1. Get semantic search results for the current query from both conversation and documents
         if query:
+            # Search in current conversation
             semantic_memories = self.search_memories(
                 query=query,
                 conversation_id=conversation_id,
-                limit=min(limit, 3)  # Limit to top 3 most relevant
+                limit=min(limit, 2)  # Limit to top 2 most relevant from conversation
             )
             
-            if semantic_memories:
-                context_parts.append("## Relevant previous discussion:")
-                for mem in semantic_memories:
-                    role = mem.get('metadata', {}).get('role', 'user').upper()
-                    context_parts.append(f"- [{role}] {mem['text']}")
+            # Also search in documents using the document processor's vector store
+            try:
+                from ..services.document_processor import DocumentProcessor
+                doc_processor = DocumentProcessor(None)  # We only need the vector store
+                doc_memories = doc_processor.vector_store.search_memories(
+                    query=query,
+                    limit=min(limit, 3)  # Get slightly more from documents
+                )
+                
+                # Format document memories to match conversation memory format
+                formatted_doc_memories = [{
+                    'text': mem.get('text', ''),
+                    'metadata': {
+                        **mem.get('metadata', {}),
+                        'source': mem.get('metadata', {}).get('source', 'document')
+                    },
+                    'score': mem.get('score', 0.0)
+                } for mem in doc_memories if mem.get('score', 0) > 0.3]  # Filter by minimum score
+                
+            except Exception as e:
+                logger.error(f"Error searching document store: {str(e)}")
+                formatted_doc_memories = []
+            
+            # Combine and sort all memories by relevance
+            all_memories = semantic_memories + formatted_doc_memories
+            all_memories.sort(key=lambda x: x.get('score', 0), reverse=True)
+            
+            if all_memories:
+                context_parts.append("## Relevant information from knowledge base:")
+                for mem in all_memories[:limit]:  # Apply limit after combining
+                    source = mem.get('metadata', {}).get('source', 'conversation')
+                    if source == 'conversation':
+                        role = mem.get('metadata', {}).get('role', 'user').upper()
+                        context_parts.append(f"- [Conversation] [{role}] {mem.get('text', '')}")
+                    else:
+                        source_name = Path(source).name if source != 'document' else 'document'
+                        context_parts.append(f"- [Document: {source_name}] {mem.get('text', '')}")
         
         # 2. Get recent messages for flow
         recent_memories = self.memory_store.get_conversation_memories(
@@ -168,7 +202,7 @@ class AIAssistant:
             context_parts.append("\n## Recent conversation:")
             for mem in recent_memories:
                 role = mem.get('metadata', {}).get('role', 'user').upper()
-                context_parts.append(f"- [{role}] {mem['text']}")
+                context_parts.append(f"- [{role}] {mem.get('text', '')}")
         
         # 3. Extract and include important facts
         important_facts = self._extract_important_facts(conversation_id)

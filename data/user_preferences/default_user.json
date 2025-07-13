@@ -5,25 +5,25 @@
     "humor_level": 0.3
   },
   "topics_of_interest": {
-    "technology": 0.3013900164848308,
-    "food": 0.13852823587134439,
-    "sports": 0.047549502495
+    "technology": 0.3448923551567827,
+    "food": 0.13577152397750464,
+    "sports": 0.0466032673953495
   },
-  "preferred_response_length": 64.00784529542504,
+  "preferred_response_length": 69.5263546892943,
   "communication_patterns": {
     "active_hours": {
       "5": 5,
       "6": 1,
       "7": 3,
       "13": 6,
-      "14": 6
+      "14": 8
     },
     "common_phrases": {},
     "recent_messages": [
-      "hello maya",
-      "stop"
+      "What documents do you have about HEDES?",
+      "What is HEDES?"
     ]
   },
-  "last_updated": "2025-07-13T14:33:30.703543",
-  "interaction_count": 21
+  "last_updated": "2025-07-13T14:55:23.555710",
+  "interaction_count": 23
 }

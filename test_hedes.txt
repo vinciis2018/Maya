@@ -1,0 +1,1 @@
+HEDES (Highly Efficient Document Extraction System) is an AI assistant designed to help with document processing and information retrieval. It supports various document formats including PDF, text, and web pages. The system uses semantic search to find relevant information from uploaded documents.
