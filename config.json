@@ -1,7 +1,7 @@
 {
   "agent_name": "Maya",
   "ollama_base_url": "http://localhost:11434",
-  "server_port": 3009,
+  "server_port": 8001,
   "embedding_model": "all-MiniLM-L6-v2",
   "document_processing": {
     "chunk_size": 1000,

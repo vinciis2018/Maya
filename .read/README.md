@@ -65,7 +65,7 @@ python voice_command.py
 
 
 <!-- Upload a document for RAG -->
-curl -X POST -F "file=@/Users/kishanvinciis/Downloads/INVOICE_WEEDINGWIRE_Weedingwire060625/INVOICE_WEEDINGWIRE_Weedingwire060625.pdf" http://localhost:3009/api/documents/upload
+curl -X POST -F "file=@test.pdf" http://localhost:3009/api/documents/upload
 
 <!-- Process a web page for RAG-->
 curl -X POST -H "Content-Type: application/json" -d '{"url":"https://example.com"}' http://localhost:3009/api/documents/process-url

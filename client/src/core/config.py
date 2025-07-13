@@ -18,7 +18,10 @@ class Config:
             config_path = project_root / 'config.json'
             
         self.config_path = str(config_path)
+        print(f"Loading config from: {self.config_path}")
         self._config = self._load_config()
+        print(f"Server port from config: {self._config.get('server_port')}")
+        print(f"Server URL: {self.server_url}")
     
     def _load_config(self) -> Dict[str, Any]:
         """Load configuration from file."""
