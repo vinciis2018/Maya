@@ -64,23 +64,12 @@ Vani                ta_IN    # Hello! My name is Vani.
 python voice_command.py
 
 
+<!-- Upload a document for RAG -->
+curl -X POST -F "file=@/Users/kishanvinciis/Downloads/INVOICE_WEEDINGWIRE_Weedingwire060625/INVOICE_WEEDINGWIRE_Weedingwire060625.pdf" http://localhost:3009/api/documents/upload
 
-<!-- Client Folder Structure -->
-client/
-├── src/
-│   ├── __init__.py
-│   ├── api/
-│   │   └── client.py         # API client for server communication
-│   ├── ui/
-│   │   ├── __init__.py
-│   │   ├── base_ui.py        # Abstract base UI class
-│   │   └── console_ui.py     # Rich console-based UI implementation
-│   ├── voice/
-│   │   ├── __init__.py
-│   │   ├── recorder.py       # Audio recording functionality
-│   │   ├── trainer.py        # Voice training and recognition
-│   │   ├── tts.py           # Text-to-speech functionality
-│   │   └── command.py       # Voice command handling
-│   └── application.py       # Main application class
-├── main.py                  # Entry point
-└── requirements.txt         # Dependencies
+<!-- Process a web page for RAG-->
+curl -X POST -H "Content-Type: application/json" -d '{"url":"https://example.com"}' http://localhost:3009/api/documents/process-url
+
+
+<!-- Process a directory for RAG -->
+curl -X POST -H "Content-Type: application/json" -d '{"directory":"/Users/kishanvinciis/Downloads/INVOICE_WEEDINGWIRE_Weedingwire060625"}' http://localhost:3009/api/documents/process-directory

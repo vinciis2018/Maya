@@ -28,7 +28,7 @@ Your AI assistant foundation is solid! Here's a roadmap to advance it while buil
 
 ## Immediate Enhancements (Next 2-4 weeks)
 
-**Memory & Context Management:**
+**Memory & Context Management:** (DONE)
 - Implement persistent memory across sessions using vector databases (ChromaDB, Pinecone)
 - Add conversation summarization for long-term context retention
 - Create user preference learning (remembers your habits, interests)
@@ -40,7 +40,7 @@ User personalization that improves over time
 Searchable conversation history
 Memory management tools (cleanup, stats)
 
-**RAG Integration:**
+**RAG Integration:** (IN PROGRESS)
 - Start with document ingestion (PDFs, web pages, personal notes)
 - Build a simple semantic search system
 - Implement hybrid search (keyword + semantic)

@@ -333,9 +333,10 @@ class Application:
                 self.ui.print_message("\nStopping speech...")
                 return
                 
-            # Show typing indicator
+            # Show user message
             self.ui.print_message(f"\nYou: {message}")
-            self.ui.print_message("AI: ", end="")
+            # Show AI prefix without newline
+            self.ui.print_message("Maya: ", end="")
             
             # Send to server
             response = self.api_client.chat(message)
@@ -344,15 +345,23 @@ class Application:
             if 'conversation_id' in response:
                 self.current_conversation_id = response['conversation_id']
                 
-            # Display response
-            ai_response = response.get('response', 'No response from server')
-            
-            # Extract just the message content (remove any AI: prefix if present)
-            if isinstance(ai_response, str):
-                # Remove any leading 'AI:' or similar prefixes
-                message_content = ai_response.split(':', 1)[-1].strip()
+            # Extract the response text
+            if isinstance(response, dict):
+                # If the response has a 'response' key, use that
+                if 'response' in response:
+                    response_text = response['response']
+                    # If the response is a string, clean it up
+                    if isinstance(response_text, str):
+                        # Remove any leading 'Maya:' or 'AI:' prefix if present
+                        message_content = response_text.split(':', 1)[-1].strip()
+                    else:
+                        message_content = str(response_text)
+                else:
+                    # If no 'response' key, convert the whole response to string
+                    message_content = str(response)
             else:
-                message_content = str(ai_response)
+                # If response is not a dict, convert to string
+                message_content = str(response)
                 
             self.ui.print_message(f"{message_content}")
             

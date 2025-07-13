@@ -3,6 +3,16 @@ import json
 import os
 from datetime import datetime
 import uuid
+from pathlib import Path
+from typing import Optional, Dict, List, Any, Tuple
+import logging
+import time
+from ..services.vector_store import VectorMemoryStore
+from ..services.user_preference_manager import UserPreferenceManager
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 class AIAssistant:
     def __init__(self, agent_name, ollama_base_url, personalities_config, conversation_config):
@@ -13,9 +23,36 @@ class AIAssistant:
         self.current_personality = 'default'
         self.current_conversation_id = None
         self.conversations = {}
+        self.current_user_id = "default_user"  # In a real app, this would come from authentication
         
-        # Create conversations directory if it doesn't exist
+        # Initialize vector memory store
+        self.memory_store = VectorMemoryStore(
+            persist_directory=str(Path('data/vector_store'))
+        )
+        
+        # Initialize user preference manager
+        self.preference_manager = UserPreferenceManager(
+            user_id=self.current_user_id,
+            data_dir=str(Path('data/user_preferences'))
+        )
+
+        # Personality tips database
+        self.tips = {
+            "coder": [
+                "Use list comprehensions for cleaner Python code",
+                "Always validate user input in web applications",
+                "Regular commits make version control easier"
+            ],
+            "creative": [
+                "Try freewriting to overcome writer's block",
+                "Read your dialogue out loud to test its flow",
+                "Use sensory details to immerse your reader"
+            ]
+        }
+        
+        # Create data directories if they don't exist
         os.makedirs('conversations', exist_ok=True)
+        os.makedirs('data/user_preferences', exist_ok=True)
         
         # Verify Ollama connection
         try:
@@ -47,6 +84,85 @@ class AIAssistant:
             'concise': f"Brief{self.agent_name}"
         }
         return personality_map.get(self.current_personality, self.agent_name)
+    
+    def _store_memory(self, conversation_id: str, role: str, content: str, metadata: Optional[Dict] = None) -> str:
+        """Store a memory in the vector store.
+        
+        Args:
+            conversation_id: ID of the conversation
+            role: 'user' or 'assistant'
+            content: The message content
+            metadata: Additional metadata to store
+            
+        Returns:
+            str: ID of the stored memory
+        """
+        if metadata is None:
+            metadata = {}
+            
+        # Add role and timestamp to metadata
+        metadata.update({
+            'role': role,
+            'timestamp': datetime.utcnow().isoformat(),
+            'personality': self.current_personality
+        })
+        
+        # Store the memory
+        return self.memory_store.add_memory(
+            conversation_id=conversation_id,
+            text=content,
+            metadata=metadata
+        )
+    
+    def search_memories(self, query: str, conversation_id: Optional[str] = None, limit: int = 5) -> List[Dict[str, Any]]:
+        """Search for relevant memories.
+        
+        Args:
+            query: Search query
+            conversation_id: Optional conversation ID to filter by
+            limit: Maximum number of results to return
+            
+        Returns:
+            List of relevant memories with scores
+        """
+        return self.memory_store.search_memories(
+            query=query,
+            conversation_id=conversation_id,
+            limit=limit
+        )
+    
+    def get_conversation_context(self, conversation_id: str, query: Optional[str] = None, limit: int = 5) -> str:
+        """Get relevant context from conversation history.
+        
+        Args:
+            conversation_id: ID of the conversation
+            query: Optional query to find relevant context
+            limit: Maximum number of context items to return
+            
+        Returns:
+            str: Formatted context string
+        """
+        if query:
+            # Semantic search for relevant memories
+            memories = self.search_memories(
+                query=query,
+                conversation_id=conversation_id,
+                limit=limit
+            )
+        else:
+            # Get most recent memories
+            memories = self.memory_store.get_conversation_memories(
+                conversation_id=conversation_id,
+                limit=limit
+            )
+        
+        # Format memories into context string
+        context_parts = []
+        for i, memory in enumerate(memories, 1):
+            role = memory.get('metadata', {}).get('role', 'unknown')
+            context_parts.append(f"{i}. [{role.upper()}] {memory['text']}")
+        
+        return "\n".join(context_parts) if context_parts else "No relevant context found."
     
     def _load_conversation(self, conversation_id):
         """Load a conversation from file"""
@@ -129,48 +245,100 @@ class AIAssistant:
         
         self._save_conversation(self.current_conversation_id, messages)
     
-    def process_input(self, user_input):
-        if not user_input.strip():
-            return f"{self._get_personality_name()}: I didn't receive any input. Please try again."
+    def _get_prompt_with_preferences(self, base_prompt: str, user_input: str) -> Tuple[str, Dict[str, Any]]:
+        """Enhance the base prompt with user preferences and context."""
+        # Get user preferences
+        style = self.preference_manager.get_preferred_response_style()
+        top_topics = self.preference_manager.get_top_topics()
+        preferred_length = self.preference_manager.get_preferred_response_length()
         
-        config = self._get_current_config()
-        
-        # Start new conversation if none exists
-        if self.conversation_config['enabled'] and not self.current_conversation_id:
-            self.start_new_conversation()
-        
-        # Format messages for Ollama API
-        messages = [
-            {"role": "system", "content": config['system_prompt']}
+        # Build style instructions
+        style_instructions = [
+            f"- Formality level: {'formal' if style['formality'] > 0.6 else 'casual' if style['formality'] < 0.4 else 'neutral'}",
+            f"- Verbosity: {'detailed' if style['verbosity'] > 0.6 else 'concise' if style['verbosity'] < 0.4 else 'moderate'}",
+            f"- Humor: {'playful' if style['humor_level'] > 0.6 else 'serious' if style['humor_level'] < 0.3 else 'slightly playful'}"
         ]
         
-        # Add conversation history if enabled
-        if self.conversation_config['enabled']:
-            for msg in self.get_conversation_history()[-6:]:  # Use last 6 messages as context
-                messages.append({"role": msg['role'], "content": msg['content']})
+        # Add topic awareness if we have strong topic preferences
+        topic_awareness = ""
+        if top_topics and top_topics[0][1] > 0.5:  # If strongest topic has score > 0.5
+            topic_awareness = "\n\nUser's interests (in order of preference):\n"
+            topic_awareness += "\n".join([f"- {topic} (relevance: {score:.1f})" for topic, score in top_topics])
+        
+        # Build the enhanced prompt
+        enhanced_prompt = (
+            f"{base_prompt}\n\n"
+            "## Response Style Guidelines\n"
+            f"{chr(10).join(style_instructions)}\n"
+            f"- Target response length: {preferred_length} tokens\n"
+            f"{topic_awareness}\n\n"
+            "## Current Conversation\n"
+        )
+        
+        # Prepare generation parameters based on preferences
+        gen_params = {
+            'temperature': min(0.7, 0.4 + (style['humor_level'] * 0.3)),  # More creative if user appreciates humor
+            'max_tokens': preferred_length,
+            'top_p': 0.9,
+            'presence_penalty': 0.5 - (style['verbosity'] * 0.3),  # More focused if user prefers concise
+            'frequency_penalty': 0.5 - (style['formality'] * 0.3)  # More formal if user prefers formality
+        }
+        
+        return enhanced_prompt, gen_params
+    
+    def _generate_response(self, user_input: str, context: Optional[str] = None) -> str:
+        """Generate a response using the Ollama API with user preferences."""
+        messages = []
+        
+        # Get base system prompt with personality
+        personality_config = self._get_current_config()
+        system_prompt = personality_config.get('system_prompt', '')
+        
+        # Enhance prompt with user preferences and context
+        enhanced_prompt, gen_params = self._get_prompt_with_preferences(system_prompt, user_input)
+        
+        # Add context if available
+        if context:
+            enhanced_prompt += f"\nContext from previous conversations:\n{context}\n\n"
+        
+        messages.append({"role": "system", "content": enhanced_prompt})
+        
+        # Add conversation history
+        for msg in self.get_conversation_history()[-6:]:  # Use last 6 messages as context
+            messages.append({"role": msg['role'], "content": msg['content']})
         
         # Add current message
         messages.append({"role": "user", "content": user_input})
         
         try:
-            # Call Ollama API
+            # Prepare the request payload with generation parameters
+            payload = {
+                "model": personality_config.get('model', 'llama2'),
+                "messages": messages,
+                "stream": False,
+                "options": {
+                    "temperature": gen_params['temperature'],
+                    "top_p": gen_params['top_p'],
+                    "num_ctx": personality_config.get('num_ctx', 2048),
+                    "presence_penalty": gen_params['presence_penalty'],
+                    "frequency_penalty": gen_params['frequency_penalty'],
+                    "max_tokens": gen_params['max_tokens']
+                }
+            }
+            
+            # Make the API request
             response = requests.post(
                 f"{self.ollama_base_url}/api/chat",
-                json={
-                    "model": config['model'],
-                    "messages": messages,
-                    "stream": False,
-                    "options": {
-                        "temperature": 0.7,
-                        "top_p": 0.9,
-                        "num_ctx": 2048
-                    }
-                }
+                json=payload,
+                timeout=30  # 30 second timeout
             )
             
             if response.status_code == 200:
                 result = response.json()
                 assistant_response = result['message']['content']
+                
+                # Update user preferences based on this interaction
+                self.preference_manager.update_from_interaction(user_input, assistant_response)
                 
                 # Save to conversation history
                 if self.conversation_config['enabled']:
@@ -183,7 +351,90 @@ class AIAssistant:
                 
                 return assistant_response
             else:
-                return f"{self._get_personality_name()}: Error processing your request (Status {response.status_code})"
+                error_msg = f"Error processing your request (Status {response.status_code})"
+                logger.error(f"API Error: {error_msg}")
+                return f"{self._get_personality_name()}: {error_msg}"
                 
         except requests.exceptions.RequestException as e:
-            return f"{self._get_personality_name()}: I'm having trouble connecting to my backend. Please try again later."
+            error_msg = f"I'm having trouble connecting to my backend. Please try again later. ({str(e)})"
+            logger.error(f"Connection Error: {error_msg}")
+            return f"{self._get_personality_name()}: {error_msg}"
+    
+    def process_input(self, user_input, conversation_id=None, personality=None, use_memory: bool = True):
+        """Process user input and generate a response.
+        
+        Args:
+            user_input: The user's input text
+            conversation_id: Optional conversation ID to continue
+            personality: Optional personality to use
+            use_memory: Whether to use vector memory for context
+            
+        Returns:
+            dict: Response containing the assistant's reply and metadata
+        """
+        # Set personality if provided
+        if personality and personality in self.personalities_config:
+            self.current_personality = personality
+            
+        # Get or create conversation
+        if conversation_id is None:
+            conversation_id = str(uuid.uuid4())
+            self.conversations[conversation_id] = []
+        elif conversation_id not in self.conversations:
+            loaded_conv = self._load_conversation(conversation_id)
+            self.conversations[conversation_id] = loaded_conv['messages'] if loaded_conv and 'messages' in loaded_conv else []
+            
+        self.current_conversation_id = conversation_id
+        
+        # Store user message in vector memory
+        self._store_memory(
+            conversation_id=conversation_id,
+            role="user",
+            content=user_input,
+            metadata={
+                "personality": self.current_personality,
+                "type": "user_input"
+            }
+        )
+        
+        # Add user message to conversation
+        self.conversations[conversation_id].append({"role": "user", "content": user_input})
+        
+        # Get relevant context if using memory
+        context = ""
+        if use_memory:
+            context = self.get_conversation_context(
+                conversation_id=conversation_id,
+                query=user_input,
+                limit=3  # Use top 3 most relevant memories
+            )
+        
+        # Generate response with context
+        response = self._generate_response(user_input, context=context if use_memory else None)
+        
+        # Store assistant response in vector memory
+        self._store_memory(
+            conversation_id=conversation_id,
+            role="assistant",
+            content=response,
+            metadata={
+                "personality": self.current_personality,
+                "type": "assistant_response"
+            }
+        )
+        
+        # Add assistant response to conversation
+        self.conversations[conversation_id].append({"role": "assistant", "content": response})
+        
+        # Save conversation
+        if self.conversation_config['enabled']:
+            self._save_conversation(conversation_id, self.conversations[conversation_id])
+            self._cleanup_old_conversations()
+            
+        # Return a properly formatted response
+        return {
+            'response': response,
+            'conversation_id': conversation_id,
+            'personality': self.current_personality,
+            'context_used': context if use_memory else None
+        }
